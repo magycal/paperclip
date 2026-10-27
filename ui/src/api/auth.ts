@@ -22,6 +22,18 @@ export interface SignOutResult {
   redirectTo?: string;
 }
 
+export interface SsoProvider {
+  id: string;
+  label: string;
+}
+
+export interface SignInOptions {
+  emailSignUpEnabled: boolean;
+  ssoProviders: SsoProvider[];
+}
+
+const DEFAULT_SIGN_IN_OPTIONS: SignInOptions = { emailSignUpEnabled: true, ssoProviders: [] };
+
 export class AuthApiError extends Error {
   status: number;
   code: string | null;
@@ -177,6 +189,47 @@ export const authApi = {
 
   signUpEmail: async (input: { name: string; email: string; password: string }) => {
     await authPost("/sign-up/email", input);
+  },
+
+  /**
+   * What the sign-in page should offer: SSO buttons, and whether email sign-up is
+   * open. Falls back to the stock page (sign-up shown, no SSO) on servers without
+   * this endpoint; the server enforces its own sign-up setting either way.
+   */
+  getSignInOptions: async (): Promise<SignInOptions> => {
+    const res = await fetch("/api/auth/sign-in-options", {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    }).catch(() => null);
+    if (!res?.ok) return DEFAULT_SIGN_IN_OPTIONS;
+    const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!payload) return DEFAULT_SIGN_IN_OPTIONS;
+    const providers = Array.isArray(payload.ssoProviders) ? payload.ssoProviders : [];
+    return {
+      emailSignUpEnabled: payload.emailSignUpEnabled !== false,
+      ssoProviders: providers.filter(
+        (p): p is SsoProvider =>
+          !!p && typeof p === "object" && typeof (p as SsoProvider).id === "string" && typeof (p as SsoProvider).label === "string",
+      ),
+    };
+  },
+
+  /**
+   * Starts an SSO sign-in and returns the provider URL to navigate to. Both callback
+   * URLs are same-origin paths; Better Auth appends `?error=` to the error one.
+   */
+  startSsoSignIn: async (input: { providerId: string; callbackPath: string; errorPath: string }): Promise<string> => {
+    const payload = (await authPost("/sign-in/social", {
+      provider: input.providerId,
+      callbackURL: input.callbackPath,
+      errorCallbackURL: input.errorPath,
+      newUserCallbackURL: input.callbackPath,
+    })) as { url?: unknown } | null;
+    if (!payload || typeof payload.url !== "string") {
+      throw new Error("Single sign-on is unavailable. Try again or use your email and password.");
+    }
+    return payload.url;
   },
 
   getProfile: async (): Promise<CurrentUserProfile> => {

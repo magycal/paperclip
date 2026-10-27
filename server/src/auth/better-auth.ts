@@ -11,6 +11,7 @@ import {
   authVerifications,
 } from "@paperclipai/db";
 import type { Config } from "../config.js";
+import { buildOidcAuthOptions, resolveOidcProviderConfig } from "./oidc.js";
 import { resolvePaperclipInstanceId } from "../home-paths.js";
 import {
   workspaceLoginHandoffPlugin,
@@ -257,6 +258,9 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
     publicUrl,
   });
 
+  const oidcProvider = resolveOidcProviderConfig();
+  const oidc = oidcProvider ? buildOidcAuthOptions(oidcProvider) : null;
+
   const authConfig = {
     baseURL: baseUrl,
     secret,
@@ -281,13 +285,16 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
       override: process.env.PAPERCLIP_AUTH_RATE_LIMIT_ENABLED,
     }),
     advanced: buildBetterAuthAdvancedOptions({ disableSecureCookies }),
-    // Registered only for a managed workspace instance: the plugin is what makes
-    // `Open workspace` password-independent, and a control-plane instance that
+    ...(oidc ? { account: oidc.account } : {}),
+    // The workspace handoff plugin is registered only for a managed workspace instance: it is
+    // what makes `Open workspace` password-independent, and a control-plane instance that
     // was never handed a workspace key must not expose the exchange at all.
-    ...(resolveWorkspaceHandoffIdentity(config)
+    ...(resolveWorkspaceHandoffIdentity(config) || oidc
       ? {
           plugins: [
-            workspaceLoginHandoffPlugin({
+            ...(oidc ? [oidc.plugin] : []),
+            ...(resolveWorkspaceHandoffIdentity(config)
+              ? [workspaceLoginHandoffPlugin({
               db,
               // Re-resolved per exchange so a hot restart cannot keep validating
               // against an origin the control plane has since republished.
@@ -299,7 +306,8 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
                   companyId: null,
                   origin: null,
                 },
-            }),
+            })]
+              : []),
           ],
         }
       : {}),

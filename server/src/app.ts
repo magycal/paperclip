@@ -137,6 +137,7 @@ import {
 } from "./routes/instance-database-backups.js";
 import { llmRoutes } from "./routes/llms.js";
 import { authRoutes } from "./routes/auth.js";
+import { resolveOidcProviderConfig, toOidcPublicProviders } from "./auth/oidc.js";
 import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
@@ -509,6 +510,8 @@ export async function createApp(
     databaseBackupHealth?: InspectDatabaseBackupHealthOptions;
     deploymentMode: DeploymentMode;
     deploymentExposure: DeploymentExposure;
+    /** Email/password self sign-up is off (PAPERCLIP_AUTH_DISABLE_SIGN_UP). */
+    authDisableSignUp?: boolean;
     allowedHostnames: string[];
     bindHost: string;
     authPublicBaseUrl?: string;
@@ -649,6 +652,18 @@ export async function createApp(
   // REPLACES whatever actor the request otherwise resolved to, and only on
   // the one endpoint it authorizes (see the middleware for the contract).
   app.use(cloudControlMiddleware());
+  // Public on purpose: the sign-in page needs it before anyone is signed in. It
+  // says only whether email sign-up is open and which SSO buttons to show (id +
+  // label), never endpoints or secrets.
+  const signInOptions = {
+    emailSignUpEnabled: !opts.authDisableSignUp,
+    ssoProviders: toOidcPublicProviders(
+      opts.deploymentMode === "authenticated" ? resolveOidcProviderConfig() : null,
+    ),
+  };
+  app.get("/api/auth/sign-in-options", (_req, res) => {
+    res.json(signInOptions);
+  });
   app.use("/api/auth", authRoutes(db));
   if (opts.betterAuthHandler) {
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);

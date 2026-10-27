@@ -13,6 +13,8 @@ const signInEmailMock = vi.hoisted(() => vi.fn());
 const signUpEmailMock = vi.hoisted(() => vi.fn());
 const healthMock = vi.hoisted(() => vi.fn());
 const beginCloudSignInMock = vi.hoisted(() => vi.fn());
+const getSignInOptionsMock = vi.hoisted(() => vi.fn());
+const startSsoSignInMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/health", () => ({ healthApi: { get: () => healthMock() } }));
 vi.mock("@/lib/cloud-sign-in", () => ({
@@ -25,6 +27,8 @@ vi.mock("../api/auth", () => ({
     getSession: () => getSessionMock(),
     signInEmail: (input: unknown) => signInEmailMock(input),
     signUpEmail: (input: unknown) => signUpEmailMock(input),
+    getSignInOptions: () => getSignInOptionsMock(),
+    startSsoSignIn: (input: unknown) => startSsoSignInMock(input),
   },
 }));
 
@@ -98,6 +102,7 @@ describe("AuthPage", () => {
     beginCloudSignInMock.mockReturnValue(true);
     signInEmailMock.mockResolvedValue(undefined);
     signUpEmailMock.mockResolvedValue(undefined);
+    getSignInOptionsMock.mockResolvedValue({ emailSignUpEnabled: true, ssoProviders: [] });
   });
 
   afterEach(() => {
@@ -133,6 +138,58 @@ describe("AuthPage", () => {
     expect(target.pathname).toBe("/v1/stacks/team/entry-redirect");
     expect(target.searchParams.get("returnTo")).toBe("/TEST/issues/TEST-1?tab=activity#comment");
     expect(container.querySelector("form")).toBeNull();
+    await act(() => root.unmount());
+  });
+
+  it("shows no SSO button when no provider is configured", async () => {
+    const { root } = await mount();
+    expect(container.querySelector("form")).not.toBeNull();
+    expect(container.textContent).not.toContain("Sign in with");
+    await act(() => root.unmount());
+  });
+
+  it("starts SSO with same-origin callback paths when a provider is configured", async () => {
+    getSignInOptionsMock.mockResolvedValue({ emailSignUpEnabled: true, ssoProviders: [{ id: "authentik", label: "Magycal" }] });
+    startSsoSignInMock.mockReturnValue(new Promise(() => {}));
+    const { root } = await mount("/auth?next=%2FMAG%2Fissues");
+    const button = await vi.waitFor(() => {
+      const found = Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Sign in with Magycal"),
+      );
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(container.querySelector("form")).not.toBeNull();
+    await act(() => button.click());
+    await vi.waitFor(() =>
+      expect(startSsoSignInMock).toHaveBeenCalledWith({
+        providerId: "authentik",
+        callbackPath: "/MAG/issues",
+        errorPath: "/auth",
+      }),
+    );
+    await act(() => root.unmount());
+  });
+
+  it("hides the create-account link when the server has sign-up disabled", async () => {
+    getSignInOptionsMock.mockResolvedValue({ emailSignUpEnabled: false, ssoProviders: [] });
+    const { root } = await mount();
+    expect(container.querySelector("form")).not.toBeNull();
+    expect(container.textContent).not.toContain("Need an account?");
+    expect(container.textContent).not.toContain("Create one");
+    await act(() => root.unmount());
+  });
+
+  it("keeps the create-account link when sign-up is open", async () => {
+    const { root } = await mount();
+    expect(container.textContent).toContain("Need an account?");
+    await act(() => root.unmount());
+  });
+
+  it("shows the provider error Better Auth appends to the error callback", async () => {
+    getSignInOptionsMock.mockResolvedValue({ emailSignUpEnabled: true, ssoProviders: [{ id: "authentik", label: "Magycal" }] });
+    const { root } = await mount("/auth?error=signup_disabled");
+    await vi.waitFor(() => expect(container.textContent).toContain("isn't allowed to sign in here"));
     await act(() => root.unmount());
   });
 

@@ -36,6 +36,28 @@ export function AuthPage() {
     queryFn: () => healthApi.get(),
     retry: false,
   });
+  const signInOptionsQuery = useQuery({
+    queryKey: ["auth", "sign-in-options"],
+    queryFn: () => authApi.getSignInOptions(),
+    retry: false,
+    staleTime: Infinity,
+  });
+  const ssoProviders = signInOptionsQuery.data?.ssoProviders ?? [];
+  const emailSignUpEnabled = signInOptionsQuery.data?.emailSignUpEnabled ?? true;
+  const ssoError = searchParams.get("error");
+  const ssoMutation = useMutation({
+    mutationFn: async (providerId: string) => {
+      const url = await authApi.startSsoSignIn({
+        providerId,
+        callbackPath: nextPath,
+        errorPath: "/auth",
+      });
+      window.location.assign(url);
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "Single sign-on failed");
+    },
+  });
   const { data: session, isLoading: isSessionLoading, error: sessionError } = useQuery({
     queryKey: queryKeys.auth.session,
     queryFn: () => authApi.getSession(),
@@ -82,7 +104,12 @@ export function AuthPage() {
     password.trim().length > 0 &&
     (mode === "sign_in" || (name.trim().length > 0 && password.trim().length >= 8));
 
-  if (healthQuery.isLoading || isSessionLoading || session) {
+  // Never leave the page on the sign-up form once we know sign-up is closed.
+  useEffect(() => {
+    if (!emailSignUpEnabled && mode === "sign_up") setMode("sign_in");
+  }, [emailSignUpEnabled, mode]);
+
+  if (healthQuery.isLoading || isSessionLoading || signInOptionsQuery.isLoading || session) {
     return (
       <div className="fixed inset-0 flex items-center justify-center">
         <PaperclipLoading className="min-h-0" />
@@ -119,6 +146,37 @@ export function AuthPage() {
               ? "Use your email and password to access this instance."
               : "Create an account for this instance. Email confirmation is not required in v1."}
           </p>
+
+          {mode === "sign_in" && ssoProviders.length > 0 && (
+            <div className="mt-6 space-y-3">
+              {ssoProviders.map((provider) => (
+                <Button
+                  key={provider.id}
+                  type="button"
+                  className="w-full"
+                  disabled={ssoMutation.isPending}
+                  onClick={() => {
+                    setError(null);
+                    ssoMutation.mutate(provider.id);
+                  }}
+                >
+                  {ssoMutation.isPending ? "Redirecting…" : `Sign in with ${provider.label}`}
+                </Button>
+              ))}
+              {ssoError && !error && (
+                <p role="alert" className="text-xs text-destructive">
+                  {ssoError === "signup_disabled"
+                    ? "Your account isn't allowed to sign in here."
+                    : `Single sign-on failed (${ssoError}).`}
+                </p>
+              )}
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                or use your email
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            </div>
+          )}
 
           <form
             className="mt-6 space-y-4"
@@ -204,6 +262,7 @@ export function AuthPage() {
             </Button>
           </form>
 
+          {emailSignUpEnabled && (
           <div className="mt-5 text-sm text-muted-foreground">
             {mode === "sign_in" ? "Need an account?" : "Already have an account?"}{" "}
             <button
@@ -217,6 +276,7 @@ export function AuthPage() {
               {mode === "sign_in" ? "Create one" : "Sign in"}
             </button>
           </div>
+          )}
         </div>
       </div>
 
